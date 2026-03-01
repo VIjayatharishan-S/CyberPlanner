@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neural HUD Planner</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Rajdhani:wght@400;600&display=swap" rel="stylesheet">
+
+<style>
+
+:root{
+    --bg:#050816;
+    --cyan:#00f7ff;
+    --magenta:#ff00ea;
+    --panel:rgba(15,20,40,0.55);
+    --text:#dffcff;
+}
+
+*{
+    box-sizing:border-box;
+    transition: all 0.4s cubic-bezier(0.16,1,0.3,1);
+}
+
+body{
+    margin:0;
+    font-family:'Rajdhani', sans-serif;
+    background:linear-gradient(to bottom,#050816,#0a0016);
+    color:var(--text);
+    overflow:hidden;
+}
+
+canvas{
+    position:fixed;
+    inset:0;
+    z-index:-1;
+}
+
+/* TITLE */
+
+h1{
+    font-family:'Orbitron', sans-serif;
+    text-align:center;
+    letter-spacing:12px;
+    margin-top:40px;
+    color:var(--cyan);
+    animation:flicker 3s infinite;
+}
+
+@keyframes flicker{
+    0%,18%,22%,25%,53%,57%,100%{
+        text-shadow:
+            0 0 5px #00f7ff,
+            0 0 20px #00f7ff,
+            0 0 40px rgba(0,255,255,0.5);
+        opacity:1;
+    }
+    20%,24%,55%{
+        opacity:0.85;
+        text-shadow:none;
+    }
+}
+
+.system-status{
+    text-align:center;
+    opacity:0.7;
+    letter-spacing:3px;
+}
+
+/* HUD CONTAINER */
+
+.hud-container{
+    perspective:1200px;
+    display:flex;
+    justify-content:center;
+    margin-top:50px;
+}
+
+.board{
+    display:flex;
+    gap:25px;
+    transform-style:preserve-3d;
+}
+
+/* DAY PANEL */
+
+.day{
+    position:relative;
+    width:220px;
+    padding:20px;
+    border-radius:20px;
+    background:var(--panel);
+    backdrop-filter:blur(20px);
+    border:1px solid rgba(0,255,255,0.3);
+    box-shadow:
+        0 0 20px rgba(0,255,255,0.2),
+        0 0 60px rgba(255,0,234,0.1),
+        inset 0 0 30px rgba(0,255,255,0.1);
+    cursor:pointer;
+    overflow:hidden;
+}
+
+.day::before{
+    content:"";
+    position:absolute;
+    inset:-2px;
+    background:linear-gradient(45deg,#ff00ea,#00f7ff,#ff00ea);
+    opacity:0.2;
+    animation:borderSpin 6s linear infinite;
+    z-index:-1;
+}
+
+@keyframes borderSpin{
+    100%{ transform:rotate(360deg); }
+}
+
+.day:hover{
+    transform:translateY(-10px) scale(1.05);
+    box-shadow:
+        0 0 40px rgba(0,255,255,0.4),
+        0 0 80px rgba(255,0,234,0.4),
+        inset 0 0 50px rgba(0,255,255,0.3);
+}
+
+.progress{
+    height:6px;
+    background:rgba(255,255,255,0.1);
+    border-radius:10px;
+    margin-top:10px;
+}
+
+.progress-fill{
+    height:100%;
+    background:linear-gradient(90deg,#00f7ff,#ff00ea);
+    box-shadow:0 0 20px #00f7ff;
+}
+
+/* LIVE TIMER */
+
+.live-timer{
+    position:fixed;
+    bottom:30px;
+    right:30px;
+    padding:15px 25px;
+    background:rgba(0,0,0,0.6);
+    border:1px solid var(--magenta);
+    color:var(--cyan);
+    backdrop-filter:blur(15px);
+    box-shadow:0 0 40px var(--magenta);
+    border-radius:15px;
+    font-family:'Orbitron', sans-serif;
+    letter-spacing:2px;
+}
+
+/* MODAL */
+
+.modal-overlay{
+    position:fixed;
+    inset:0;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    backdrop-filter:blur(15px);
+    background:rgba(0,0,0,0.7);
+    opacity:0;
+}
+
+.modal-panel{
+    width:500px;
+    background:rgba(5,15,35,0.95);
+    border-radius:25px;
+    border:1px solid rgba(0,255,255,0.4);
+    padding:30px;
+    transform:scale(0.8) rotateX(20deg);
+    opacity:0;
+}
+
+.modal-panel h2{
+    font-family:'Orbitron', sans-serif;
+}
+
+button{
+    background:transparent;
+    border:1px solid var(--cyan);
+    color:var(--cyan);
+    padding:8px 15px;
+    border-radius:10px;
+    cursor:pointer;
+}
+
+button:hover{
+    background:var(--cyan);
+    color:black;
+}
+
+.task-row{
+    margin:15px 0;
+    padding:12px;
+    border:1px solid rgba(0,255,255,0.3);
+    border-radius:10px;
+}
+
+.task-row input{
+    background:transparent;
+    border:1px solid rgba(255,255,255,0.2);
+    color:white;
+}
+
+</style>
+</head>
+<body>
+
+<canvas id="particles"></canvas>
+
+<h1>NEURAL ROUTINE</h1>
+<div class="system-status">SYSTEM STATUS: OPTIMAL</div>
+
+<div class="hud-container">
+    <div class="board" id="board"></div>
+</div>
+
+<div class="live-timer" id="liveTimer">SYSTEM IDLE</div>
+
+<script>
+
+/* ---------- DATA ---------- */
+
+const DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
+let data=JSON.parse(localStorage.getItem("hudData"))||{}
+DAYS.forEach(d=>{if(!data[d])data[d]=[]})
+
+function save(){localStorage.setItem("hudData",JSON.stringify(data))}
+
+/* ---------- RENDER ---------- */
+
+const board=document.getElementById("board")
+
+function render(){
+    board.innerHTML=""
+    DAYS.forEach(day=>{
+        const div=document.createElement("div")
+        div.className="day"
+        const tasks=data[day]
+        const done=tasks.filter(t=>t.done).length
+        const percent=tasks.length?(done/tasks.length)*100:0
+        div.innerHTML=`
+            <h3>${day}</h3>
+            <div>${done}/${tasks.length} Tasks Synced</div>
+            <div class="progress">
+                <div class="progress-fill" style="width:${percent}%"></div>
+            </div>`
+        div.onclick=()=>openDay(day)
+        board.appendChild(div)
+    })
+}
+render()
+
+/* ---------- MODAL ---------- */
+
+function openDay(day){
+    const overlay=document.createElement("div")
+    overlay.className="modal-overlay"
+
+    const panel=document.createElement("div")
+    panel.className="modal-panel"
+    panel.innerHTML=`
+        <h2>${day}</h2>
+        <button id="addTask">+ Add Task</button>
+        <button id="close">Close</button>
+        <div id="taskList"></div>`
+
+    overlay.appendChild(panel)
+    document.body.appendChild(overlay)
+
+    setTimeout(()=>{
+        overlay.style.opacity="1"
+        panel.style.transform="scale(1) rotateX(0deg)"
+        panel.style.opacity="1"
+    },10)
+
+    document.getElementById("close").onclick=()=>{
+        overlay.style.opacity="0"
+        setTimeout(()=>overlay.remove(),300)
+    }
+
+    document.getElementById("addTask").onclick=()=>{
+        data[day].push({id:Date.now(),title:"New Task",done:false})
+        save()
+        renderDay(day,panel)
+        render()
+    }
+
+    renderDay(day,panel)
+}
+
+function renderDay(day,panel){
+    const list=panel.querySelector("#taskList")
+    list.innerHTML=""
+    data[day].forEach(task=>{
+        const row=document.createElement("div")
+        row.className="task-row"
+        row.innerHTML=`
+            <input type="checkbox" ${task.done?"checked":""}>
+            <input type="text" value="${task.title}">
+            <button>Delete</button>`
+        const [check,title]=row.querySelectorAll("input")
+        check.onchange=()=>{
+            task.done=check.checked
+            save()
+            render()
+            if(!task.done) startTimer(task)
+            else stopTimer()
+        }
+        title.oninput=()=>{task.title=title.value;save()}
+        row.querySelector("button").onclick=()=>{
+            data[day]=data[day].filter(t=>t.id!==task.id)
+            save()
+            renderDay(day,panel)
+            render()
+        }
+        list.appendChild(row)
+    })
+}
+
+/* ---------- LIVE TIMER ---------- */
+
+let timerInt=null
+function startTimer(task){
+    stopTimer()
+    let seconds=0
+    timerInt=setInterval(()=>{
+        seconds++
+        const m=Math.floor(seconds/60)
+        const s=(seconds%60).toString().padStart(2,"0")
+        document.getElementById("liveTimer").innerText=
+            `ACTIVE: ${task.title} ${m}:${s}`
+    },1000)
+}
+function stopTimer(){
+    clearInterval(timerInt)
+    document.getElementById("liveTimer").innerText="SYSTEM IDLE"
+}
+
+/* ---------- 3D TILT ---------- */
+
+document.addEventListener("mousemove",e=>{
+    const x=(e.clientX/window.innerWidth-0.5)*20
+    const y=(e.clientY/window.innerHeight-0.5)*20
+    board.style.transform=`rotateY(${x}deg) rotateX(${-y}deg)`
+})
+
+/* ---------- PARTICLES ---------- */
+
+const canvas=document.getElementById("particles")
+const ctx=canvas.getContext("2d")
+let w,h
+function resize(){w=canvas.width=innerWidth;h=canvas.height=innerHeight}
+resize();window.onresize=resize
+
+let particles=[]
+for(let i=0;i<100;i++){
+    particles.push({
+        x:Math.random()*w,
+        y:Math.random()*h,
+        vx:(Math.random()-0.5)*0.5,
+        vy:(Math.random()-0.5)*0.5,
+        size:Math.random()*2
+    })
+}
+
+function animate(){
+    ctx.clearRect(0,0,w,h)
+    particles.forEach(p=>{
+        p.x+=p.vx
+        p.y+=p.vy
+        if(p.x<0||p.x>w)p.vx*=-1
+        if(p.y<0||p.y>h)p.vy*=-1
+        ctx.fillStyle="rgba(0,255,255,0.4)"
+        ctx.beginPath()
+        ctx.arc(p.x,p.y,p.size,0,Math.PI*2)
+        ctx.fill()
+    })
+    requestAnimationFrame(animate)
+}
+animate()
+
+</script>
+</body>
+</html>
